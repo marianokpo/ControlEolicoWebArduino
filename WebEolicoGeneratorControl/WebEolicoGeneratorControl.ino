@@ -2,6 +2,8 @@
 #include <Ethernet.h>
 #include <SD.h>
 
+#define REQ_BUF_SZ   50    // Buffer para las peticiones HTTP
+
 #define ANALOGCARGA 4
 #define ANALOGINTENCIDAD 3
 #define ANALOGVOLTAGE 2
@@ -10,6 +12,9 @@
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED }; // Dirección MAC de la etiqueta de Sheld Ethernet debajo de la Placa
 IPAddress ip(192, 168, 0, 200); // Dirección IP, puede necesitar cambiar dependiendo de la red
 EthernetServer server(80);  // crear un servidor en el puerto 80
+
+char HTTP_req[REQ_BUF_SZ] = {0};
+char req_index = 0;
 
 File webFile;
 
@@ -35,6 +40,10 @@ float AmperGen = 0.0;
 // Variables del sensor en Voltaje-------------------------------------
 int sensorVolt;         // variable que almacena el valor raw (0 a 1023)
 float VoltGen;            // variable que almacena el voltaje (0.0 a 25.0)
+
+
+
+float RPM = 0.0;
 
 
 //********************************************************************
@@ -95,44 +104,97 @@ void loop()
           if (client.available()) 
           {   // datos de clientes disponibles para leer
               char c = client.read(); // leer 1 byte (carácter) del cliente
-              // la última línea de solicitud del cliente está en blanco y termina con \ n
-              // responder al cliente solo después de la última línea recibida
-              if (c == '\n' && currentLineIsBlank) 
-              {
-                  // enviar un encabezado de respuesta http estándar
-                  client.println("HTTP/1.1 200 OK");
-                  client.println("Content-Type: text/html");
-                  client.println("Connection: close");
-                  client.println();
-                  // enviar página web
-                  webFile = SD.open("index.htm");        // abrir el archivo de la página web
-                  if (webFile) 
-                  {
-                      while(webFile.available()) 
-                      {
-                          client.write(webFile.read()); // enviar página web al cliente
-                      }
-                      webFile.close();
-                  }
-                  break;
+              if (req_index < (REQ_BUF_SZ - 1))
+               {   HTTP_req[req_index] = c;   // Montar la peticion HTTP
+                   req_index++;
+               }
+               if (c == '\n' && currentLineIsBlank)
+                 {   client.println("HTTP/1.1 200 OK");
+                     if (StrContains(HTTP_req, "ajax_inputs"))
+                        { client.println("Content-Type: text/xml");
+                          client.println("Connection: keep-alive");
+                          client.println();
+                          // send XML file containing input states 
+                          XML_response(client);
+                        }
+               else
+                   {  client.println("Content-Type: text/html");
+                      client.println("Connection: keep-alive");
+                      client.println();
+                      webFile = SD.open("index.htm");   // open web page file
+                      if (webFile)
+                         {  while(webFile.available())
+                            client.write(webFile.read()); // send web page to client
+                            webFile.close();
+                         }
+                   }
+               Serial.print(HTTP_req);
+               req_index = 0;
+               StrClear(HTTP_req, REQ_BUF_SZ);
+               break;
+            }
+            // every line of text received from the client ends with \r\n
+            if (c == '\n')
+                currentLineIsBlank = true;
+            else if (c != '\r')
+                currentLineIsBlank = false;
+           } // end if (client.available())
+         } // end while (client.connected())
+     delay(1);      // give the web browser time to receive the data
+     client.stop(); // close the connection
+    } // end if (client)
+}
+
+void XML_response(EthernetClient cl)
+{ 
+   cl.print("<?xml version = \"1.0\" ?>");
+   cl.print("<inputs>");
+   cl.print("<Carga>");
+   cl.print(voltaje);
+   cl.print("</Carga>");
+   cl.print("<Corriente>");
+   cl.print(AmperGen);
+   cl.print("</Corriente>");
+   cl.print("<Voltaje>");
+   cl.print(VoltGen);
+   cl.print("</Voltaje>");
+   cl.print("<RPM>");
+   cl.print(RPM);
+   cl.print("</RPM>");
+   cl.print("</inputs>");
+}
+// sets every element of str to 0 (clears array)
+void StrClear(char *str, char length)
+ {
+      for (int i = 0; i < length; i++) 
+           str[i] = 0;
+ }
+
+// searches for the string sfind in the string str
+// returns 1 if string found
+// returns 0 if string not found
+char StrContains(char *str, char *sfind)
+   {
+       char found = 0;
+       char index = 0;
+       char len;
+       len = strlen(str);
+
+       if (strlen(sfind) > len) 
+           return 0;
+     
+      while (index < len) 
+        {
+           if (str[index] == sfind[found]) 
+              {   found++;
+                  if (strlen(sfind) == found) 
+                      return 1;
               }
-              // cada línea de texto recibida del cliente termina con \ r \ n
-              if (c == '\n') 
-              {
-                  // último carácter en la línea de texto recibido
-                  // comenzando una nueva linea con el siguiente caracter leído
-                  currentLineIsBlank = true;
-              } 
-              else if (c != '\r') 
-              {
-                  // se recibió un carácter de texto del cliente
-                  currentLineIsBlank = false;
-              }
-          } // end if (client.available())
-      } // end while (client.connected())
-      delay(1);      // darle tiempo al navegador web para recibir los datos
-      client.stop(); // cierra la conexión
-  } // end if (client)
+           else 
+              found = 0; 
+           index++;
+        }
+      return 0;
 }
 
 float getCorriente(int samplesNumber)
